@@ -47,11 +47,15 @@ type Config struct {
 		Device struct {
 			Count           int           `mapstructure:"count"`
 			UplinkInterval  time.Duration `mapstructure:"uplink_interval"`
+			RejoinInterval  time.Duration `mapstructure:"rejoin_interval"`
 			FPort           uint8         `mapstructure:"f_port"`
 			Payload         string        `mapstructure:"payload"`
 			Frequency       int           `mapstructure:"frequency"`
 			Bandwidth       int           `mapstructure:"bandwidth"`
 			SpreadingFactor int           `mapstructure:"spreading_factor"`
+			JoinFlood 		bool		  `mapstructure:"join_flood"`
+			JoinFloodInterval time.Duration `mapstructure:"join_flood_interval"`
+
 		} `mapstructure:"device"`
 
 		Gateway struct {

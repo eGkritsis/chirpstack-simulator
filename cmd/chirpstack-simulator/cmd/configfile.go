@@ -143,6 +143,7 @@ activation_time="{{ $element.ActivationTime }}"
   [simulator.device]
   count={{ $element.Device.Count }}
   uplink_interval="{{ $element.Device.UplinkInterval }}"
+  rejoin_interval="{{ $element.Device.RejoinInterval }}"
   f_port="{{ $element.Device.FPort }}"
   payload="{{ $element.Device.Payload }}"
   frequency={{ $element.Device.Frequency }}

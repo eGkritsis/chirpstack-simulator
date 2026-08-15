@@ -48,6 +48,9 @@ func Start(ctx context.Context, wg *sync.WaitGroup, c config.Config) error {
 			deviceCount:          c.Device.Count,
 			activationTime:       c.ActivationTime,
 			uplinkInterval:       c.Device.UplinkInterval,
+			rejoinInterval:       c.Device.RejoinInterval,
+			joinFlood:            c.Device.JoinFlood,
+			joinFloodInterval:    c.Device.JoinFloodInterval,
 			fPort:                c.Device.FPort,
 			payload:              pl,
 			frequency:            c.Device.Frequency,
@@ -80,6 +83,9 @@ type simulation struct {
 	payload         []byte
 	activationTime  time.Duration
 	uplinkInterval  time.Duration
+	rejoinInterval  time.Duration
+	joinFlood       bool
+	joinFloodInterval time.Duration
 	frequency       int
 	bandwidth       int
 	spreadingFactor int
@@ -94,25 +100,60 @@ type simulation struct {
 	commandTopicTemplate string
 }
 
+
 func (s *simulation) start() {
+	// Mark this goroutine as finished when start() returns.
+	defer s.wg.Done()
+
+	// ---------------------------------------------------------------------
+	// Set up the simulation.
+	// This creates the tenant, gateways, application, device-profile,
+	// devices, MQTT subscriptions, etc.
+	// ---------------------------------------------------------------------
 	if err := s.init(); err != nil {
 		log.WithError(err).Error("simulator: init simulation error")
+		return
 	}
 
+	// ---------------------------------------------------------------------
+	// Run the actual simulation.
+	// This blocks until the configured simulation duration has elapsed.
+	// ---------------------------------------------------------------------
 	if err := s.runSimulation(); err != nil {
 		log.WithError(err).Error("simulator: simulation error")
 	}
 
 	log.Info("simulator: simulation completed")
+	log.Info("================================================================")
+	log.Info("The simulation has finished.")
+	log.Info("All simulated gateways/devices are STILL present in ChirpStack.")
+	log.Info("You can now inspect PostgreSQL, MQTT, Prometheus, etc.")
+	log.Info("Press Ctrl+C when you are ready to clean everything up.")
+	log.Info("================================================================")
 
+	// ---------------------------------------------------------------------
+	// Wait until the user presses Ctrl+C.
+	// ---------------------------------------------------------------------
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+
+	<-sig
+
+	log.Info("simulation: received Ctrl+C")
+	log.Info("simulation: cleaning up")
+
+	// ---------------------------------------------------------------------
+	// Remove everything the simulator created.
+	// ---------------------------------------------------------------------
 	if err := s.tearDown(); err != nil {
 		log.WithError(err).Error("simulator: tear-down simulation error")
 	}
 
-	s.wg.Done()
-
 	log.Info("simulation: tear-down completed")
 }
+
+
+
 
 func (s *simulation) init() error {
 	log.Info("simulation: setting up")
@@ -209,10 +250,11 @@ func (s *simulation) runSimulation() error {
 			gws = append(gws, devGateways[k])
 		}
 
-		d, err := simulator.NewDevice(ctx, &wg,
+		opts := []simulator.DeviceOption{
 			simulator.WithDevEUI(devEUI),
 			simulator.WithAppKey(appKey),
 			simulator.WithUplinkInterval(s.uplinkInterval),
+			simulator.WithRejoinInterval(s.rejoinInterval),
 			simulator.WithOTAADelay(time.Duration(mrand.Int63n(int64(s.activationTime)))),
 			simulator.WithUplinkPayload(false, s.fPort, s.payload),
 			simulator.WithGateways(gws),
@@ -228,7 +270,15 @@ func (s *simulation) runSimulation() error {
 					},
 				},
 			}),
-		)
+		}
+
+		if s.joinFlood {
+			opts = append(opts, simulator.WithJoinFlood(s.joinFloodInterval))
+		}
+
+		d, err := simulator.NewDevice(ctx, &wg, opts...)
+
+
 		if err != nil {
 			return errors.Wrap(err, "new device error")
 		}

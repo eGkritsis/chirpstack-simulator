@@ -103,6 +103,21 @@ type Device struct {
 
 	// OTAA delay.
 	otaaDelay time.Duration
+
+	// Flood mode: if true, repeatedly send join-requests without waiting
+	// for join-accept, ignoring downlink confirmation entirely.
+	joinFlood bool
+
+	// Delay between flood join-requests. 0 = as fast as possible.
+	joinFloodInterval time.Duration
+
+	// Rejoin interval. If non-zero, the device will trigger a new OTAA
+	// join this long after each successful activation, simulating a
+	// device that periodically (re)joins rather than joining once.
+	rejoinInterval time.Duration
+
+	// Timestamp of the last successful join-accept.
+	lastJoinTime time.Time
 }
 
 // WithAppKey sets the AppKey.
@@ -133,6 +148,16 @@ func WithJoinEUI(joinEUI lorawan.EUI64) DeviceOption {
 func WithOTAADelay(delay time.Duration) DeviceOption {
 	return func(d *Device) error {
 		d.otaaDelay = delay
+		return nil
+	}
+}
+
+// WithRejoinInterval sets the interval after which the device will trigger
+// a new OTAA join following a successful activation. Use 0 (default) to
+// disable rejoining, matching original behaviour.
+func WithRejoinInterval(interval time.Duration) DeviceOption {
+	return func(d *Device) error {
+		d.rejoinInterval = interval
 		return nil
 	}
 }
@@ -201,6 +226,17 @@ func WithDownlinkHandlerFunc(f func(confirmed, ack bool, fCntDown uint32, fPort 
 	}
 }
 
+// WithJoinFlood enables continuous join-request flooding, ignoring
+// join-accept confirmation. interval controls delay between requests
+// (0 = tight loop, as fast as possible).
+func WithJoinFlood(interval time.Duration) DeviceOption {
+	return func(d *Device) error {
+		d.joinFlood = true
+		d.joinFloodInterval = interval
+		return nil
+	}
+}
+
 // NewDevice creates a new device simulation.
 func NewDevice(ctx context.Context, wg *sync.WaitGroup, opts ...DeviceOption) (*Device, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -250,6 +286,12 @@ func (d *Device) uplinkLoop() {
 		switch d.getState() {
 		case deviceStateOTAA:
 			d.joinRequest()
+			if d.joinFlood {
+				if d.joinFloodInterval > 0 {
+					time.Sleep(d.joinFloodInterval)
+				}
+				continue // don't wait for accept, send another immediately
+			}
 			time.Sleep(6 * time.Second)
 		case deviceStateActivated:
 			d.dataUp()
@@ -263,6 +305,14 @@ func (d *Device) uplinkLoop() {
 					d.cancel()
 					return
 				}
+			}
+
+			if d.rejoinInterval != 0 && time.Since(d.getLastJoinTime()) >= d.rejoinInterval {
+				log.WithFields(log.Fields{
+					"dev_eui": d.devEUI,
+				}).Info("simulator: triggering rejoin")
+				d.setState(deviceStateOTAA)
+				continue
 			}
 
 			time.Sleep(d.uplinkInterval)
@@ -434,6 +484,7 @@ func (d *Device) joinAccept(phy lorawan.PHYPayload) error {
 		"dev_addr": d.devAddr,
 	}).Info("simulator: device OTAA activated")
 
+	d.setLastJoinTime(time.Now())
 	d.setState(deviceStateActivated)
 	deviceJoinAcceptCounter().Inc()
 
@@ -554,4 +605,16 @@ func (d *Device) setState(s deviceState) {
 	d.Unlock()
 
 	d.state = s
+}
+
+func (d *Device) getLastJoinTime() time.Time {
+	d.RLock()
+	defer d.RUnlock()
+	return d.lastJoinTime
+}
+
+func (d *Device) setLastJoinTime(t time.Time) {
+	d.Lock()
+	defer d.Unlock()
+	d.lastJoinTime = t
 }
